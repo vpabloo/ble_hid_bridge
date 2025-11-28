@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="GitSharedSettings">
+    <option name="FORCE_PUSH_PROHIBITED_PATTERNS">
+      <list />
+    </option>
+    <option name="synchronizeBranchProtectionRules" value="false" />
+  </component>
+  <component name="VcsDirectoryMappings">
+    <mapping directory="$PROJECT_DIR$" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/unleashed-firmware" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/unleashed-firmware/applications/main/subghz_remote" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/unleashed-firmware/assets/protobuf" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/unleashed-firmware/lib/FreeRTOS-Kernel" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/unleashed-firmware/lib/FreeRTOS-Kernel/portable/ThirdParty/Community-Supported-Ports" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/unleashed-firmware/lib/FreeRTOS-Kernel/portable/ThirdParty/Partner-Supported-Ports" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/unleashed-firmware/lib/heatshrink" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/unleashed-firmware/lib/libusb_stm32" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/unleashed-firmware/lib/mbedtls" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/unleashed-firmware/lib/mbedtls/framework" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/unleashed-firmware/lib/microtar" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/unleashed-firmware/lib/mlib" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/unleashed-firmware/lib/nanopb" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/unleashed-firmware/lib/stm32wb_cmsis" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/unleashed-firmware/lib/stm32wb_copro" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/unleashed-firmware/lib/stm32wb_copro/scripts" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/unleashed-firmware/lib/stm32wb_hal" vcs="Git" />
+  </component>
+</project>
