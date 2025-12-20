@@ -29,7 +29,7 @@ if not hasattr(serial, "Serial"):
     sys.exit(1)
 
 
-CACHE_PATH = Path(__file__).resolve().parent / "bhid.json"
+CACHE_PATH = Path(__file__).resolve().parent / "bthid.json"
 KNOWN_VID_PID = {(0x0483, 0x5740)}  # STM32 VCP used by Flipper em modo normal
 
 
@@ -108,6 +108,14 @@ def main() -> int:
     move_p.add_argument("dx", type=int, help="Delta X (-127..127)")
     move_p.add_argument("dy", type=int, help="Delta Y (-127..127)")
 
+    moveto_p = subparsers.add_parser("moveto", help="Mover mouse absoluto (simulado)")
+    moveto_p.add_argument("x", type=int, help="Posição X")
+    moveto_p.add_argument("y", type=int, help="Posição Y")
+
+    movecenter_p = subparsers.add_parser("movecenter", help="Mover mouse para o centro (simulado)")
+    movecenter_p.add_argument("width", type=int, help="Largura da tela")
+    movecenter_p.add_argument("height", type=int, help="Altura da tela")
+
     btn_p = subparsers.add_parser("btn", help="Definir máscara de botões (1=esq,2=dir,4=meio)")
     btn_p.add_argument("mask", type=int, help="Bitmask desejada")
 
@@ -182,6 +190,10 @@ def main() -> int:
     with serial.Serial(port_to_use, args.baudrate, timeout=1) as ser:
         if args.cmd == "move":
             line = f"M MOVE {args.dx} {args.dy}"
+        elif args.cmd == "moveto":
+            line = f"M MOVETO {args.x} {args.y}"
+        elif args.cmd == "movecenter":
+            line = f"M MOVECENTER {args.width} {args.height}"
         elif args.cmd == "btn":
             line = f"M BTN {args.mask}"
         elif args.cmd == "scroll":
