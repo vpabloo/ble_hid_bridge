@@ -6,6 +6,7 @@
 #include <extra_profiles/hid_profile.h>
 #include <furi_hal_usb_cdc.h>
 #include <lib/libusb_stm32/inc/hid_usage_keyboard.h>
+#include <stdlib.h>
 
 #define TAG "BtHidBridge"
 #define MOD_SHIFT (1 << 8)
@@ -134,8 +135,8 @@ static void process_line(BtHidBridgeApp* app, char* line) {
             bt_profile_hid_mouse_move(app->bt_hid_profile, (int8_t)dx, (int8_t)dy);
         } else if(cmd && strcmp(cmd, "BTN") == 0) {
             int mask = next_int(&save, 0);
-            bt_profile_hid_mouse_press(app->bt_hid_profile, (uint16_t)mask); 
-            furi_delay_ms(20);
+            bt_profile_hid_mouse_press(app->bt_hid_profile, (uint16_t)mask);
+            furi_delay_ms(10 + rand() % 21);
             bt_profile_hid_mouse_release(app->bt_hid_profile, (uint16_t)mask);
         } else if(cmd && strcmp(cmd, "SCROLL") == 0) {
             int v = next_int(&save, 0);
