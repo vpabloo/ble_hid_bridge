@@ -19,7 +19,7 @@ typedef struct {
     FuriThread* cdc_thread;
     FuriStreamBuffer* rx_stream;
     Bt* bt;
-    FuriHalBtProfileBase* bt_hid_profile;
+    FuriHalBleProfileBase* bt_hid_profile;
     
     // Terminal Log
     FuriString* history[MAX_LINES];
@@ -89,13 +89,13 @@ static uint16_t ascii_to_hid(char c) {
 
 static void send_cmd_tab(BtHidBridgeApp* app) {
     // macOS Command is HID Left GUI. Hold Command while tapping Tab.
-    bt_profile_hid_kb_press(app->bt_hid_profile, HID_KEYBOARD_L_GUI);
+    ble_profile_hid_kb_press(app->bt_hid_profile, HID_KEYBOARD_L_GUI);
     furi_delay_ms(10);
-    bt_profile_hid_kb_press(app->bt_hid_profile, HID_KEYBOARD_TAB);
+    ble_profile_hid_kb_press(app->bt_hid_profile, HID_KEYBOARD_TAB);
     furi_delay_ms(20);
-    bt_profile_hid_kb_release(app->bt_hid_profile, HID_KEYBOARD_TAB);
+    ble_profile_hid_kb_release(app->bt_hid_profile, HID_KEYBOARD_TAB);
     furi_delay_ms(10);
-    bt_profile_hid_kb_release(app->bt_hid_profile, HID_KEYBOARD_L_GUI);
+    ble_profile_hid_kb_release(app->bt_hid_profile, HID_KEYBOARD_L_GUI);
 }
 
 static void perform_move_to(BtHidBridgeApp* app, int x, int y) {
@@ -103,7 +103,7 @@ static void perform_move_to(BtHidBridgeApp* app, int x, int y) {
     // Send enough negative deltas to cover any reasonable screen resolution
     // 50 * 127 = 6350 pixels
     for(int i = 0; i < 50; i++) {
-        bt_profile_hid_mouse_move(app->bt_hid_profile, -127, -127);
+        ble_profile_hid_mouse_move(app->bt_hid_profile, -127, -127);
         furi_delay_ms(10);
     }
 
@@ -124,7 +124,7 @@ static void perform_move_to(BtHidBridgeApp* app, int x, int y) {
 
         if(dx == 0 && dy == 0) break;
 
-        bt_profile_hid_mouse_move(app->bt_hid_profile, (int8_t)dx, (int8_t)dy);
+        ble_profile_hid_mouse_move(app->bt_hid_profile, (int8_t)dx, (int8_t)dy);
         cur_x += dx;
         cur_y += dy;
         furi_delay_ms(10);
@@ -143,15 +143,15 @@ static void process_line(BtHidBridgeApp* app, char* line) {
         if(cmd && strcmp(cmd, "MOVE") == 0) {
             int dx = next_int(&save, 0);
             int dy = next_int(&save, 0);
-            bt_profile_hid_mouse_move(app->bt_hid_profile, (int8_t)dx, (int8_t)dy);
+            ble_profile_hid_mouse_move(app->bt_hid_profile, (int8_t)dx, (int8_t)dy);
         } else if(cmd && strcmp(cmd, "BTN") == 0) {
             int mask = next_int(&save, 0);
-            bt_profile_hid_mouse_press(app->bt_hid_profile, (uint16_t)mask);
+            ble_profile_hid_mouse_press(app->bt_hid_profile, (uint16_t)mask);
             furi_delay_ms(10 + rand() % 21);
-            bt_profile_hid_mouse_release(app->bt_hid_profile, (uint16_t)mask);
+            ble_profile_hid_mouse_release(app->bt_hid_profile, (uint16_t)mask);
         } else if(cmd && strcmp(cmd, "SCROLL") == 0) {
             int v = next_int(&save, 0);
-            bt_profile_hid_mouse_scroll(app->bt_hid_profile, (int8_t)v);
+            ble_profile_hid_mouse_scroll(app->bt_hid_profile, (int8_t)v);
         } else if(cmd && strcmp(cmd, "MOVETO") == 0) {
             int x = next_int(&save, 0);
             int y = next_int(&save, 0);
@@ -172,13 +172,13 @@ static void process_line(BtHidBridgeApp* app, char* line) {
                     uint16_t combo = ascii_to_hid(*text++);
                     if(combo) {
                         if(combo & MOD_SHIFT) {
-                             bt_profile_hid_kb_press(app->bt_hid_profile, HID_KEYBOARD_L_SHIFT);
+                             ble_profile_hid_kb_press(app->bt_hid_profile, HID_KEYBOARD_L_SHIFT);
                         }
-                        bt_profile_hid_kb_press(app->bt_hid_profile, combo & 0xFF);
+                        ble_profile_hid_kb_press(app->bt_hid_profile, combo & 0xFF);
                         furi_delay_ms(15);
-                        bt_profile_hid_kb_release(app->bt_hid_profile, combo & 0xFF);
+                        ble_profile_hid_kb_release(app->bt_hid_profile, combo & 0xFF);
                         if(combo & MOD_SHIFT) {
-                             bt_profile_hid_kb_release(app->bt_hid_profile, HID_KEYBOARD_L_SHIFT);
+                             ble_profile_hid_kb_release(app->bt_hid_profile, HID_KEYBOARD_L_SHIFT);
                         }
                         furi_delay_ms(15);
                     }
@@ -186,9 +186,9 @@ static void process_line(BtHidBridgeApp* app, char* line) {
             }
         } else if(cmd && strcmp(cmd, "KEY") == 0) {
             int code = next_int(&save, 0);
-            bt_profile_hid_kb_press(app->bt_hid_profile, (uint16_t)code);
+            ble_profile_hid_kb_press(app->bt_hid_profile, (uint16_t)code);
             furi_delay_ms(20);
-            bt_profile_hid_kb_release(app->bt_hid_profile, (uint16_t)code);
+            ble_profile_hid_kb_release(app->bt_hid_profile, (uint16_t)code);
         }
     }
 }
@@ -306,7 +306,7 @@ int32_t hid_bt_bridge_app(void* p) {
     furi_delay_ms(200); 
     
     bt_set_status_changed_callback(app->bt, bt_status_callback, app);
-    app->bt_hid_profile = bt_profile_start(app->bt, bt_profile_hid, NULL);
+    app->bt_hid_profile = bt_profile_start(app->bt, ble_profile_hid, NULL);
     furi_hal_bt_start_advertising();
 
     // USB Init
