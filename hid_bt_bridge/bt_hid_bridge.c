@@ -87,6 +87,17 @@ static uint16_t ascii_to_hid(char c) {
     return 0;
 }
 
+static void send_cmd_tab(BtHidBridgeApp* app) {
+    // macOS Command is HID Left GUI. Hold Command while tapping Tab.
+    bt_profile_hid_kb_press(app->bt_hid_profile, HID_KEYBOARD_L_GUI);
+    furi_delay_ms(10);
+    bt_profile_hid_kb_press(app->bt_hid_profile, HID_KEYBOARD_TAB);
+    furi_delay_ms(20);
+    bt_profile_hid_kb_release(app->bt_hid_profile, HID_KEYBOARD_TAB);
+    furi_delay_ms(10);
+    bt_profile_hid_kb_release(app->bt_hid_profile, HID_KEYBOARD_L_GUI);
+}
+
 static void perform_move_to(BtHidBridgeApp* app, int x, int y) {
     // 1. Reset to top-left (0,0)
     // Send enough negative deltas to cover any reasonable screen resolution
@@ -316,7 +327,10 @@ int32_t hid_bt_bridge_app(void* p) {
     while(1) {
         if(furi_message_queue_get(app->event_queue, &event, FuriWaitForever) == FuriStatusOk) {
             if(event.type == EventTypeKey) {
-                if(event.input.type == InputTypeShort && event.input.key == InputKeyBack) {
+                if(event.input.type == InputTypeShort && event.input.key == InputKeyOk) {
+                    send_cmd_tab(app);
+                    log_append(app, "KEY: CMD+TAB");
+                } else if(event.input.type == InputTypeShort && event.input.key == InputKeyBack) {
                     break;
                 }
             }
