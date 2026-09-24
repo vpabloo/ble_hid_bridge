@@ -6,7 +6,7 @@ App(
     stack_size=2 * 1024,
     sources=["*.c", "!transport_usb.c"],
     cdefines=["HID_TRANSPORT_BT"],
-    fap_libs=["bt_profile"],
+    fap_libs=["ble_profile"],
     fap_description="Bluetooth Remote with USB Bridge",
     fap_version="1.2",
     fap_category="Bluetooth",
