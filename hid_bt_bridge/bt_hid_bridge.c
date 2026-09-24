@@ -26,6 +26,10 @@ typedef struct {
     
     bool bt_connected;
     volatile bool cdc_running;
+
+    // Application switcher state
+    bool app_switcher;
+    bool command_held;
 } BtHidBridgeApp;
 
 typedef enum {
