@@ -87,15 +87,69 @@ static uint16_t ascii_to_hid(char c) {
     return 0;
 }
 
-static void send_cmd_tab(BtHidBridgeApp* app) {
-    // macOS Command is HID Left GUI. Hold Command while tapping Tab.
-    ble_profile_hid_kb_press(app->bt_hid_profile, HID_KEYBOARD_L_GUI);
-    furi_delay_ms(10);
-    ble_profile_hid_kb_press(app->bt_hid_profile, HID_KEYBOARD_TAB);
+static void send_key_tap(BtHidBridgeApp* app, uint16_t key) {
+    ble_profile_hid_kb_press(app->bt_hid_profile, key);
     furi_delay_ms(20);
-    ble_profile_hid_kb_release(app->bt_hid_profile, HID_KEYBOARD_TAB);
-    furi_delay_ms(10);
-    ble_profile_hid_kb_release(app->bt_hid_profile, HID_KEYBOARD_L_GUI);
+    ble_profile_hid_kb_release(app->bt_hid_profile, key);
+}
+
+static void command_press(BtHidBridgeApp* app) {
+    if(!app->command_held) {
+        ble_profile_hid_kb_press(app->bt_hid_profile, HID_KEYBOARD_L_GUI);
+        app->command_held = true;
+    }
+}
+
+static void command_release(BtHidBridgeApp* app) {
+    if(app->command_held) {
+        ble_profile_hid_kb_release(app->bt_hid_profile, HID_KEYBOARD_L_GUI);
+        app->command_held = false;
+    }
+}
+
+static void app_switcher_start(BtHidBridgeApp* app) {
+    command_press(app);
+    app->app_switcher = true;
+    log_append(app, "APP SWITCHER: CMD ON");
+}
+
+static void app_switcher_select(BtHidBridgeApp* app) {
+    // With Command held, pressing 1 selects the current app/window group.
+    send_key_tap(app, HID_KEYBOARD_1);
+    command_release(app);
+    app->app_switcher = false;
+    log_append(app, "APP: SELECT CMD+1");
+}
+
+static void app_switcher_cancel(BtHidBridgeApp* app) {
+    command_release(app);
+    app->app_switcher = false;
+    log_append(app, "APP SWITCHER: CANCEL");
+}
+
+static void remapped_direction(BtHidBridgeApp* app, InputKey key) {
+    // Permanent physical-button remap:
+    // Left -> Up, Up -> Right, Right -> Down, Down -> Left.
+    uint16_t hid_key = 0;
+
+    switch(key) {
+    case InputKeyLeft:
+        hid_key = HID_KEYBOARD_UP_ARROW;
+        break;
+    case InputKeyUp:
+        hid_key = HID_KEYBOARD_RIGHT_ARROW;
+        break;
+    case InputKeyRight:
+        hid_key = HID_KEYBOARD_DOWN_ARROW;
+        break;
+    case InputKeyDown:
+        hid_key = HID_KEYBOARD_LEFT_ARROW;
+        break;
+    default:
+        return;
+    }
+
+    send_key_tap(app, hid_key);
 }
 
 static void perform_move_to(BtHidBridgeApp* app, int x, int y) {
@@ -238,18 +292,24 @@ static void draw_callback(Canvas* canvas, void* context) {
     canvas_clear(canvas);
     canvas_set_font(canvas, FontSecondary);
     
-    // Draw history lines
-    // Line height approx 9-10px to be safe? 
-    // FontSecondary is usually ~7px height + 1-2px leading. 
-    // Let's use 10px spacing.
-    int y = 9; // Baseline for first line
-    
-    for(int i = 0; i < MAX_LINES; i++) {
-        const char* str = furi_string_get_cstr(app->history[i]);
-        if(str && *str) {
-            canvas_draw_str(canvas, 2, y, str);
-        }
-        y += 10;
+    if(app->app_switcher) {
+        canvas_set_font(canvas, FontPrimary);
+        canvas_draw_str(canvas, 2, 10, "APP SWITCHER");
+        canvas_set_font(canvas, FontSecondary);
+        canvas_draw_str(canvas, 2, 21, "CMD: ON");
+        canvas_draw_str(canvas, 2, 31, "UP  = TAB");
+        canvas_draw_str(canvas, 2, 41, "LEFT = CMD+1");
+        canvas_draw_str(canvas, 2, 51, "BACK = CANCEL");
+        canvas_draw_str(canvas, 2, 62, "SELECT APP");
+    } else {
+        canvas_set_font(canvas, FontPrimary);
+        canvas_draw_str(canvas, 2, 10, "BT HID BRIDGE");
+        canvas_set_font(canvas, FontSecondary);
+        canvas_draw_str(canvas, 2, 21, "D-PAD REMAP");
+        canvas_draw_str(canvas, 2, 31, "L->U  U->R");
+        canvas_draw_str(canvas, 2, 41, "R->D  D->L");
+        canvas_draw_str(canvas, 2, 51, "OK: APP SWITCHER");
+        canvas_draw_str(canvas, 2, 62, app->bt_connected ? "BT: CONNECTED" : "BT: WAITING");
     }
 }
 
@@ -327,11 +387,25 @@ int32_t hid_bt_bridge_app(void* p) {
     while(1) {
         if(furi_message_queue_get(app->event_queue, &event, FuriWaitForever) == FuriStatusOk) {
             if(event.type == EventTypeKey) {
-                if(event.input.type == InputTypeShort && event.input.key == InputKeyOk) {
-                    send_cmd_tab(app);
-                    log_append(app, "KEY: CMD+TAB");
-                } else if(event.input.type == InputTypeShort && event.input.key == InputKeyBack) {
-                    break;
+                if(event.input.type == InputTypeShort) {
+                    if(app->app_switcher) {
+                        if(event.input.key == InputKeyUp) {
+                            send_key_tap(app, HID_KEYBOARD_TAB);
+                            log_append(app, "APP: TAB");
+                        } else if(event.input.key == InputKeyLeft) {
+                            app_switcher_select(app);
+                        } else if(event.input.key == InputKeyBack) {
+                            app_switcher_cancel(app);
+                        }
+                    } else {
+                        if(event.input.key == InputKeyOk) {
+                            app_switcher_start(app);
+                        } else if(event.input.key == InputKeyBack) {
+                            break;
+                        } else {
+                            remapped_direction(app, event.input.key);
+                        }
+                    }
                 }
             }
         }
