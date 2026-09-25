@@ -487,7 +487,7 @@ static void draw_callback(Canvas* canvas, void* context) {
         canvas_draw_str(canvas, 2, 24, "OK = YES");
         canvas_draw_str(canvas, 2, 36, "BACK = NO");
         canvas_draw_str(canvas, 2, 50, "CMD WILL BE RELEASED");
-        canvas_draw_str(canvas, 2, 62, "HOLD BACK AGAIN TO EXIT");
+        canvas_draw_str(canvas, 2, 62, "OK=YES  BACK=NO");
     } else {
         canvas_draw_str(canvas, 2, 10, "BT HID BRIDGE");
         canvas_set_font(canvas, FontSecondary);
