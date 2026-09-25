@@ -226,6 +226,8 @@ static void remapped_direction(BtHidBridgeApp* app, InputKey key) {
     send_key_tap(app, hid_key);
 }
 
+static void visual_event(BtHidBridgeApp* app, InputKey key);
+
 static void handle_main_menu(BtHidBridgeApp* app, const InputEvent* input) {
     if(input->type == InputTypeShort) {
         visual_event(app, input->key);
