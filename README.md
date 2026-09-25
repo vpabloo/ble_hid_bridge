@@ -83,12 +83,13 @@ Command is released whenever a mode transition requires it and again during fina
 
 ### On-screen interface
 
-The Flipper display shows the active operating mode and its controls:
+The Flipper display shows the active operating mode and its controls. The interface now includes drawn D-pad/arrow graphics, a Command status badge, highlighted physical inputs, and an EVENT badge showing the last button action:
 
 - **BT HID BRIDGE** — normal D-pad remap and Bluetooth status.
 - **APP SWITCHER** — Command state plus Right/Left navigation, window-mode transition, selection, and cancellation.
 - **WINDOW SWITCHER** — D-pad mapping, window selection, and return to the App Switcher.
 - **EXIT APPLICATION?** — explicit confirmation before closing the application.
+- **Event feedback** — the last physical input is highlighted and labeled on screen.
 
 The most recent actions are also recorded in the bridge history log.
 
