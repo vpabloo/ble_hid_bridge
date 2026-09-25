@@ -12,6 +12,13 @@
 #define MOD_SHIFT (1 << 8)
 #define MAX_LINES 6
 
+typedef enum {
+    HidModeMain,
+    HidModeAppSwitcher,
+    HidModeWindowSwitcher,
+    HidModeExitConfirm,
+} HidMode;
+
 typedef struct {
     Gui* gui;
     ViewPort* view_port;
@@ -20,16 +27,17 @@ typedef struct {
     FuriStreamBuffer* rx_stream;
     Bt* bt;
     FuriHalBleProfileBase* bt_hid_profile;
-    
+
     // Terminal Log
     FuriString* history[MAX_LINES];
-    
+
     bool bt_connected;
     volatile bool cdc_running;
 
-    // Application switcher state
-    bool app_switcher;
+    // HID state machine
+    HidMode mode;
     bool command_held;
+    bool exit_confirmed;
 } BtHidBridgeApp;
 
 typedef enum {
@@ -46,19 +54,14 @@ typedef struct {
 // Helper to append text to the terminal history
 static void log_append(BtHidBridgeApp* app, const char* text) {
     if(!app || !text) return;
-    
-    // Rotate history: 0 is oldest, MAX_LINES-1 is newest
-    // We reuse the string object at index 0, moving it to the end
+
     FuriString* temp = app->history[0];
     for(int i = 0; i < MAX_LINES - 1; i++) {
-        app->history[i] = app->history[i+1];
+        app->history[i] = app->history[i + 1];
     }
     app->history[MAX_LINES - 1] = temp;
-    
-    // Set new text
+
     furi_string_set(app->history[MAX_LINES - 1], text);
-    
-    // Trigger redraw
     view_port_update(app->view_port);
 }
 
@@ -91,6 +94,11 @@ static uint16_t ascii_to_hid(char c) {
     return 0;
 }
 
+/*
+ * Send a complete HID key tap.
+ * The short delay makes the press/release visible to the host without
+ * holding the key long enough to trigger repeats.
+ */
 static void send_key_tap(BtHidBridgeApp* app, uint16_t key) {
     ble_profile_hid_kb_press(app->bt_hid_profile, key);
     furi_delay_ms(20);
@@ -111,29 +119,86 @@ static void command_release(BtHidBridgeApp* app) {
     }
 }
 
-static void app_switcher_start(BtHidBridgeApp* app) {
+/*
+ * Emergency cleanup for every state.
+ * All actions in this application are taps except Command, so Command is
+ * the only key that can intentionally remain pressed across events.
+ */
+static void release_all_keys(BtHidBridgeApp* app) {
+    command_release(app);
+}
+
+/*
+ * Enter macOS application switcher:
+ *   1. Press and hold Command.
+ *   2. Tap Tab once.
+ *   3. Remain in HidModeAppSwitcher with Command held.
+ */
+static void enter_app_switcher(BtHidBridgeApp* app) {
     command_press(app);
-    app->app_switcher = true;
-    log_append(app, "APP SWITCHER: CMD ON");
+    send_key_tap(app, HID_KEYBOARD_TAB);
+    app->mode = HidModeAppSwitcher;
+    log_append(app, "MODE 2: APP SWITCHER");
 }
 
-static void app_switcher_select(BtHidBridgeApp* app) {
-    // With Command held, pressing 1 selects the current app/window group.
-    send_key_tap(app, HID_KEYBOARD_1);
+/*
+ * Select the highlighted application:
+ * Enter/Return is sent while Command is still held, then Command is released.
+ */
+static void select_application(BtHidBridgeApp* app) {
+    send_key_tap(app, HID_KEYBOARD_RETURN);
     command_release(app);
-    app->app_switcher = false;
-    log_append(app, "APP: SELECT CMD+1");
+    app->mode = HidModeMain;
+    log_append(app, "APP SELECTED");
 }
 
-static void app_switcher_cancel(BtHidBridgeApp* app) {
+/*
+ * Cancel application selection without selecting anything.
+ */
+static void cancel_app_switcher(BtHidBridgeApp* app) {
     command_release(app);
-    app->app_switcher = false;
+    app->mode = HidModeMain;
     log_append(app, "APP SWITCHER: CANCEL");
 }
 
+/*
+ * Transition from application selector to window selector.
+ * The Left physical button means HID Up, then Command is released.
+ */
+static void enter_window_switcher(BtHidBridgeApp* app) {
+    send_key_tap(app, HID_KEYBOARD_UP_ARROW);
+    command_release(app);
+    app->mode = HidModeWindowSwitcher;
+    log_append(app, "MODE 3: WINDOW SWITCHER");
+}
+
+/*
+ * Re-enter the application selector from the window selector.
+ * This intentionally reconstructs the Command+Tab state instead of simply
+ * changing the enum, so the HID state and UI state remain synchronized.
+ */
+static void window_switcher_back_to_apps(BtHidBridgeApp* app) {
+    enter_app_switcher(app);
+}
+
+/*
+ * Select the highlighted window.
+ * Enter/Return is sent with Command released in Mode 3.
+ */
+static void select_window(BtHidBridgeApp* app) {
+    send_key_tap(app, HID_KEYBOARD_RETURN);
+    app->mode = HidModeMain;
+    log_append(app, "WINDOW SELECTED");
+}
+
+/*
+ * Permanent physical D-pad remap used by the normal menu and window mode:
+ *   Left  -> Up
+ *   Up    -> Right
+ *   Right -> Down
+ *   Down  -> Left
+ */
 static void remapped_direction(BtHidBridgeApp* app, InputKey key) {
-    // Permanent physical-button remap:
-    // Left -> Up, Up -> Right, Right -> Down, Down -> Left.
     uint16_t hid_key = 0;
 
     switch(key) {
@@ -156,20 +221,122 @@ static void remapped_direction(BtHidBridgeApp* app, InputKey key) {
     send_key_tap(app, hid_key);
 }
 
+static void handle_main_menu(BtHidBridgeApp* app, const InputEvent* input) {
+    if(input->type == InputTypeShort) {
+        switch(input->key) {
+        case InputKeyOk:
+            enter_app_switcher(app);
+            break;
+
+        case InputKeyBack:
+            // Short Back does not exit. Exit requires a deliberate hold.
+            log_append(app, "HOLD BACK TO EXIT");
+            break;
+
+        case InputKeyLeft:
+        case InputKeyUp:
+        case InputKeyRight:
+        case InputKeyDown:
+            remapped_direction(app, input->key);
+            break;
+
+        default:
+            break;
+        }
+    } else if(input->type == InputTypeLong && input->key == InputKeyBack) {
+        app->exit_confirmed = false;
+        app->mode = HidModeExitConfirm;
+        log_append(app, "EXIT? OK=YES BACK=NO");
+    }
+}
+
+static void handle_app_switcher(BtHidBridgeApp* app, const InputEvent* input) {
+    if(input->type != InputTypeShort) return;
+
+    switch(input->key) {
+    case InputKeyUp:
+        // Command remains held.
+        send_key_tap(app, HID_KEYBOARD_RIGHT_ARROW);
+        log_append(app, "APP: RIGHT");
+        break;
+
+    case InputKeyDown:
+        // Command remains held.
+        send_key_tap(app, HID_KEYBOARD_LEFT_ARROW);
+        log_append(app, "APP: LEFT");
+        break;
+
+    case InputKeyOk:
+        select_application(app);
+        break;
+
+    case InputKeyLeft:
+        // Up is sent first, then Command is released and Mode 3 starts.
+        enter_window_switcher(app);
+        break;
+
+    case InputKeyBack:
+        cancel_app_switcher(app);
+        break;
+
+    default:
+        break;
+    }
+}
+
+static void handle_window_switcher(BtHidBridgeApp* app, const InputEvent* input) {
+    if(input->type != InputTypeShort) return;
+
+    switch(input->key) {
+    case InputKeyLeft:
+    case InputKeyUp:
+    case InputKeyRight:
+    case InputKeyDown:
+        remapped_direction(app, input->key);
+        break;
+
+    case InputKeyOk:
+        select_window(app);
+        break;
+
+    case InputKeyBack:
+        // Re-enter Mode 2 with a fresh Command+Tab sequence.
+        window_switcher_back_to_apps(app);
+        break;
+
+    default:
+        break;
+    }
+}
+
+static void handle_exit_confirmation(BtHidBridgeApp* app, const InputEvent* input) {
+    if(input->type != InputTypeShort) return;
+
+    switch(input->key) {
+    case InputKeyOk:
+        app->exit_confirmed = true;
+        break;
+
+    case InputKeyBack:
+        app->exit_confirmed = false;
+        app->mode = HidModeMain;
+        log_append(app, "EXIT CANCELLED");
+        break;
+
+    default:
+        break;
+    }
+}
+
 static void perform_move_to(BtHidBridgeApp* app, int x, int y) {
-    // 1. Reset to top-left (0,0)
-    // Send enough negative deltas to cover any reasonable screen resolution
-    // 50 * 127 = 6350 pixels
     for(int i = 0; i < 50; i++) {
         ble_profile_hid_mouse_move(app->bt_hid_profile, -127, -127);
         furi_delay_ms(10);
     }
 
-    // 2. Move to target (x, y)
-    // Use smaller steps to reduce mouse acceleration effects
     int cur_x = 0;
     int cur_y = 0;
-    const int step = 30; // Conservative step size
+    const int step = 30;
 
     while(cur_x < x || cur_y < y) {
         int dx = x - cur_x;
@@ -177,7 +344,7 @@ static void perform_move_to(BtHidBridgeApp* app, int x, int y) {
 
         if(dx > step) dx = step;
         if(dy > step) dy = step;
-        if(dx < 0) dx = 0; 
+        if(dx < 0) dx = 0;
         if(dy < 0) dy = 0;
 
         if(dx == 0 && dy == 0) break;
@@ -190,12 +357,11 @@ static void perform_move_to(BtHidBridgeApp* app, int x, int y) {
 }
 
 static void process_line(BtHidBridgeApp* app, char* line) {
-    // Log the raw command before parsing (parsing modifies the string)
     log_append(app, line);
 
     char* save = line;
     char* type = next_token(&save);
-    
+
     if(type && strcmp(type, "M") == 0) {
         char* cmd = next_token(&save);
         if(cmd && strcmp(cmd, "MOVE") == 0) {
@@ -230,13 +396,13 @@ static void process_line(BtHidBridgeApp* app, char* line) {
                     uint16_t combo = ascii_to_hid(*text++);
                     if(combo) {
                         if(combo & MOD_SHIFT) {
-                             ble_profile_hid_kb_press(app->bt_hid_profile, HID_KEYBOARD_L_SHIFT);
+                            ble_profile_hid_kb_press(app->bt_hid_profile, HID_KEYBOARD_L_SHIFT);
                         }
                         ble_profile_hid_kb_press(app->bt_hid_profile, combo & 0xFF);
                         furi_delay_ms(15);
                         ble_profile_hid_kb_release(app->bt_hid_profile, combo & 0xFF);
                         if(combo & MOD_SHIFT) {
-                             ble_profile_hid_kb_release(app->bt_hid_profile, HID_KEYBOARD_L_SHIFT);
+                            ble_profile_hid_kb_release(app->bt_hid_profile, HID_KEYBOARD_L_SHIFT);
                         }
                         furi_delay_ms(15);
                     }
@@ -255,6 +421,7 @@ static int32_t cdc_thread_task(void* context) {
     BtHidBridgeApp* app = context;
     char buf[128];
     size_t idx = 0;
+
     while(app->cdc_running) {
         uint8_t byte;
         if(furi_stream_buffer_receive(app->rx_stream, &byte, 1, 50) == 1) {
@@ -267,10 +434,11 @@ static int32_t cdc_thread_task(void* context) {
             } else if(idx < sizeof(buf) - 1) {
                 buf[idx++] = (char)byte;
             } else {
-                idx = 0; // Overflow, reset
+                idx = 0;
             }
         }
     }
+
     return 0;
 }
 
@@ -294,19 +462,33 @@ static CdcCallbacks cdc_cb = {
 static void draw_callback(Canvas* canvas, void* context) {
     BtHidBridgeApp* app = context;
     canvas_clear(canvas);
-    canvas_set_font(canvas, FontSecondary);
-    
-    if(app->app_switcher) {
-        canvas_set_font(canvas, FontPrimary);
+
+    canvas_set_font(canvas, FontPrimary);
+
+    if(app->mode == HidModeAppSwitcher) {
         canvas_draw_str(canvas, 2, 10, "APP SWITCHER");
         canvas_set_font(canvas, FontSecondary);
         canvas_draw_str(canvas, 2, 21, "CMD: ON");
-        canvas_draw_str(canvas, 2, 31, "UP  = TAB");
-        canvas_draw_str(canvas, 2, 41, "LEFT = CMD+1");
-        canvas_draw_str(canvas, 2, 51, "BACK = CANCEL");
-        canvas_draw_str(canvas, 2, 62, "SELECT APP");
+        canvas_draw_str(canvas, 2, 31, "UP  = RIGHT");
+        canvas_draw_str(canvas, 2, 41, "DOWN= LEFT");
+        canvas_draw_str(canvas, 2, 51, "LEFT= WINDOW");
+        canvas_draw_str(canvas, 2, 62, "OK=SELECT BACK=CANCEL");
+    } else if(app->mode == HidModeWindowSwitcher) {
+        canvas_draw_str(canvas, 2, 10, "WINDOW SWITCHER");
+        canvas_set_font(canvas, FontSecondary);
+        canvas_draw_str(canvas, 2, 21, "L->U  U->R");
+        canvas_draw_str(canvas, 2, 31, "R->D  D->L");
+        canvas_draw_str(canvas, 2, 41, "OK=SELECT WINDOW");
+        canvas_draw_str(canvas, 2, 51, "BACK=APP SWITCHER");
+        canvas_draw_str(canvas, 2, 62, app->bt_connected ? "BT: CONNECTED" : "BT: WAITING");
+    } else if(app->mode == HidModeExitConfirm) {
+        canvas_draw_str(canvas, 2, 10, "EXIT APPLICATION?");
+        canvas_set_font(canvas, FontSecondary);
+        canvas_draw_str(canvas, 2, 24, "OK = YES");
+        canvas_draw_str(canvas, 2, 36, "BACK = NO");
+        canvas_draw_str(canvas, 2, 50, "CMD WILL BE RELEASED");
+        canvas_draw_str(canvas, 2, 62, "HOLD BACK AGAIN TO EXIT");
     } else {
-        canvas_set_font(canvas, FontPrimary);
         canvas_draw_str(canvas, 2, 10, "BT HID BRIDGE");
         canvas_set_font(canvas, FontSecondary);
         canvas_draw_str(canvas, 2, 21, "D-PAD REMAP");
@@ -328,7 +510,7 @@ static void input_callback(InputEvent* input, void* context) {
 static void bt_status_callback(BtStatus status, void* context) {
     BtHidBridgeApp* app = context;
     bool connected = (status == BtStatusConnected);
-    
+
     if(app->bt_connected != connected) {
         app->bt_connected = connected;
         if(connected) {
@@ -341,39 +523,37 @@ static void bt_status_callback(BtStatus status, void* context) {
 
 int32_t hid_bt_bridge_app(void* p) {
     UNUSED(p);
+
     BtHidBridgeApp* app = malloc(sizeof(BtHidBridgeApp));
     memset(app, 0, sizeof(BtHidBridgeApp));
 
-    // Init history strings
+    app->mode = HidModeMain;
+
     for(int i = 0; i < MAX_LINES; i++) {
         app->history[i] = furi_string_alloc();
     }
-    
+
     app->event_queue = furi_message_queue_alloc(8, sizeof(AppEvent));
     app->rx_stream = furi_stream_buffer_alloc(512, 1);
-    
-    // UI
+
     app->view_port = view_port_alloc();
     view_port_draw_callback_set(app->view_port, draw_callback, app);
     view_port_input_callback_set(app->view_port, input_callback, app);
-    
+
     app->gui = furi_record_open(RECORD_GUI);
     gui_add_view_port(app->gui, app->view_port, GuiLayerFullscreen);
 
-    // Initial logs
     log_append(app, "USB HID Bridge Ready");
     log_append(app, "Waiting for BT...");
 
-    // BT Init
     app->bt = furi_record_open(RECORD_BT);
     bt_disconnect(app->bt);
-    furi_delay_ms(200); 
-    
+    furi_delay_ms(200);
+
     bt_set_status_changed_callback(app->bt, bt_status_callback, app);
     app->bt_hid_profile = bt_profile_start(app->bt, ble_profile_hid, NULL);
     furi_hal_bt_start_advertising();
 
-    // USB Init
     app->cdc_running = true;
     app->cdc_thread = furi_thread_alloc();
     furi_thread_set_name(app->cdc_thread, "HidBridgeCdc");
@@ -386,60 +566,55 @@ int32_t hid_bt_bridge_app(void* p) {
     furi_hal_usb_set_config(&usb_cdc_single, NULL);
     furi_hal_cdc_set_callbacks(0, &cdc_cb, app);
 
-    // Main Loop
     AppEvent event;
     while(1) {
         if(furi_message_queue_get(app->event_queue, &event, FuriWaitForever) == FuriStatusOk) {
-            if(event.type == EventTypeKey) {
-                if(event.input.type == InputTypeShort) {
-                    if(app->app_switcher) {
-                        if(event.input.key == InputKeyUp) {
-                            send_key_tap(app, HID_KEYBOARD_TAB);
-                            log_append(app, "APP: TAB");
-                        } else if(event.input.key == InputKeyLeft) {
-                            app_switcher_select(app);
-                        } else if(event.input.key == InputKeyBack) {
-                            app_switcher_cancel(app);
-                        }
-                    } else {
-                        if(event.input.key == InputKeyOk) {
-                            app_switcher_start(app);
-                        } else if(event.input.key == InputKeyBack) {
-                            break;
-                        } else {
-                            remapped_direction(app, event.input.key);
-                        }
-                    }
-                }
+            if(event.type != EventTypeKey) continue;
+
+            if(app->mode == HidModeMain) {
+                handle_main_menu(app, &event.input);
+            } else if(app->mode == HidModeAppSwitcher) {
+                handle_app_switcher(app, &event.input);
+            } else if(app->mode == HidModeWindowSwitcher) {
+                handle_window_switcher(app, &event.input);
+            } else if(app->mode == HidModeExitConfirm) {
+                handle_exit_confirmation(app, &event.input);
             }
+
+            if(app->exit_confirmed) {
+                break;
+            }
+
+            view_port_update(app->view_port);
         }
     }
 
-    // Cleanup
+    // Always release Command before leaving the application.
+    release_all_keys(app);
+
     app->cdc_running = false;
     furi_thread_join(app->cdc_thread);
     furi_thread_free(app->cdc_thread);
-    
+
     furi_hal_usb_set_config(NULL, NULL);
     furi_stream_buffer_free(app->rx_stream);
-    
+
     bt_set_status_changed_callback(app->bt, NULL, NULL);
     bt_disconnect(app->bt);
     furi_delay_ms(200);
     bt_profile_restore_default(app->bt);
-    furi_record_close(RECORD_BT); 
+    furi_record_close(RECORD_BT);
 
     gui_remove_view_port(app->gui, app->view_port);
     view_port_free(app->view_port);
     furi_record_close(RECORD_GUI);
-    
+
     furi_message_queue_free(app->event_queue);
-    
-    // Free history
+
     for(int i = 0; i < MAX_LINES; i++) {
         furi_string_free(app->history[i]);
     }
-    
+
     free(app);
 
     return 0;
