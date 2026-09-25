@@ -38,6 +38,11 @@ typedef struct {
     HidMode mode;
     bool command_held;
     bool exit_confirmed;
+
+    // Visual feedback for the last physical input/event.
+    InputKey last_key;
+    bool has_last_key;
+    uint32_t visual_event_counter;
 } BtHidBridgeApp;
 
 typedef enum {
@@ -223,6 +228,7 @@ static void remapped_direction(BtHidBridgeApp* app, InputKey key) {
 
 static void handle_main_menu(BtHidBridgeApp* app, const InputEvent* input) {
     if(input->type == InputTypeShort) {
+        visual_event(app, input->key);
         switch(input->key) {
         case InputKeyOk:
             enter_app_switcher(app);
@@ -244,6 +250,7 @@ static void handle_main_menu(BtHidBridgeApp* app, const InputEvent* input) {
             break;
         }
     } else if(input->type == InputTypeLong && input->key == InputKeyBack) {
+        visual_event(app, input->key);
         app->exit_confirmed = false;
         app->mode = HidModeExitConfirm;
         log_append(app, "EXIT? OK=YES BACK=NO");
@@ -252,6 +259,7 @@ static void handle_main_menu(BtHidBridgeApp* app, const InputEvent* input) {
 
 static void handle_app_switcher(BtHidBridgeApp* app, const InputEvent* input) {
     if(input->type != InputTypeShort) return;
+    visual_event(app, input->key);
 
     switch(input->key) {
     case InputKeyUp:
@@ -286,6 +294,7 @@ static void handle_app_switcher(BtHidBridgeApp* app, const InputEvent* input) {
 
 static void handle_window_switcher(BtHidBridgeApp* app, const InputEvent* input) {
     if(input->type != InputTypeShort) return;
+    visual_event(app, input->key);
 
     switch(input->key) {
     case InputKeyLeft:
@@ -311,6 +320,7 @@ static void handle_window_switcher(BtHidBridgeApp* app, const InputEvent* input)
 
 static void handle_exit_confirmation(BtHidBridgeApp* app, const InputEvent* input) {
     if(input->type != InputTypeShort) return;
+    visual_event(app, input->key);
 
     switch(input->key) {
     case InputKeyOk:
@@ -459,6 +469,102 @@ static CdcCallbacks cdc_cb = {
     .config_callback = NULL,
 };
 
+
+static void visual_event(BtHidBridgeApp* app, InputKey key) {
+    app->last_key = key;
+    app->has_last_key = true;
+    app->visual_event_counter++;
+    view_port_update(app->view_port);
+}
+
+static void draw_arrow(Canvas* canvas, int cx, int cy, int dx, int dy) {
+    const int len = 8;
+    const int head = 4;
+    canvas_draw_line(canvas, cx - dx * len, cy - dy * len, cx + dx * len, cy + dy * len);
+
+    if(dx == 0 && dy < 0) {
+        canvas_draw_line(canvas, cx, cy - len, cx - head, cy - len + head);
+        canvas_draw_line(canvas, cx, cy - len, cx + head, cy - len + head);
+    } else if(dx == 0 && dy > 0) {
+        canvas_draw_line(canvas, cx, cy + len, cx - head, cy + len - head);
+        canvas_draw_line(canvas, cx, cy + len, cx + head, cy + len - head);
+    } else if(dx < 0 && dy == 0) {
+        canvas_draw_line(canvas, cx - len, cy, cx - len + head, cy - head);
+        canvas_draw_line(canvas, cx - len, cy, cx - len + head, cy + head);
+    } else if(dx > 0 && dy == 0) {
+        canvas_draw_line(canvas, cx + len, cy, cx + len - head, cy - head);
+        canvas_draw_line(canvas, cx + len, cy, cx + len - head, cy + head);
+    }
+}
+
+static void draw_dpad(Canvas* canvas, int cx, int cy, int highlight) {
+    canvas_draw_circle(canvas, cx, cy, 17);
+
+    const int positions[4][2] = {
+        {cx, cy - 10},
+        {cx + 10, cy},
+        {cx, cy + 10},
+        {cx - 10, cy},
+    };
+
+    for(int i = 0; i < 4; i++) {
+        if(i == highlight) {
+            canvas_draw_disc(canvas, positions[i][0], positions[i][1], 5);
+        } else {
+            canvas_draw_circle(canvas, positions[i][0], positions[i][1], 5);
+        }
+    }
+
+    canvas_draw_line(canvas, cx - 3, cy, cx + 3, cy);
+    canvas_draw_line(canvas, cx, cy - 3, cx, cy + 3);
+}
+
+static int input_to_highlight(InputKey key) {
+    switch(key) {
+    case InputKeyUp:
+        return 0;
+    case InputKeyRight:
+        return 1;
+    case InputKeyDown:
+        return 2;
+    case InputKeyLeft:
+        return 3;
+    default:
+        return -1;
+    }
+}
+
+static const char* input_name(InputKey key) {
+    switch(key) {
+    case InputKeyUp:
+        return "UP";
+    case InputKeyDown:
+        return "DOWN";
+    case InputKeyLeft:
+        return "LEFT";
+    case InputKeyRight:
+        return "RIGHT";
+    case InputKeyOk:
+        return "OK";
+    case InputKeyBack:
+        return "BACK";
+    default:
+        return "?";
+    }
+}
+
+static void draw_event_badge(Canvas* canvas, InputKey key, bool command_held) {
+    canvas_draw_rframe(canvas, 82, 14, 42, 24, 3);
+    canvas_set_font(canvas, FontSecondary);
+    canvas_draw_str(canvas, 87, 25, "EVENT");
+    canvas_draw_str(canvas, 87, 34, input_name(key));
+
+    if(command_held) {
+        canvas_draw_rframe(canvas, 83, 40, 40, 10, 2);
+        canvas_draw_str(canvas, 89, 48, "CMD");
+    }
+}
+
 static void draw_callback(Canvas* canvas, void* context) {
     BtHidBridgeApp* app = context;
     canvas_clear(canvas);
@@ -466,36 +572,85 @@ static void draw_callback(Canvas* canvas, void* context) {
     canvas_set_font(canvas, FontPrimary);
 
     if(app->mode == HidModeAppSwitcher) {
-        canvas_draw_str(canvas, 2, 10, "APP SWITCHER");
+        canvas_draw_str(canvas, 2, 9, "APP SWITCHER");
         canvas_set_font(canvas, FontSecondary);
-        canvas_draw_str(canvas, 2, 21, "CMD: ON");
-        canvas_draw_str(canvas, 2, 31, "UP  = RIGHT");
-        canvas_draw_str(canvas, 2, 41, "DOWN= LEFT");
-        canvas_draw_str(canvas, 2, 51, "LEFT= WINDOW");
-        canvas_draw_str(canvas, 2, 62, "OK=SELECT BACK=CANCEL");
+
+        // Visual Command modifier badge and app-navigation arrows.
+        canvas_draw_rframe(canvas, 2, 14, 32, 15, 3);
+        canvas_draw_str(canvas, 8, 25, "CMD");
+        draw_arrow(canvas, 50, 22, 1, 0);
+        draw_arrow(canvas, 50, 39, -1, 0);
+
+        canvas_draw_str(canvas, 62, 25, "UP=RIGHT");
+        canvas_draw_str(canvas, 62, 42, "DN=LEFT");
+
+        canvas_draw_rframe(canvas, 2, 47, 58, 14, 3);
+        canvas_draw_str(canvas, 8, 57, "L = WINDOW");
+
+        canvas_draw_str(canvas, 66, 57, "OK=SEL");
+
+        if(app->has_last_key) {
+            draw_event_badge(canvas, app->last_key, app->command_held);
+        }
     } else if(app->mode == HidModeWindowSwitcher) {
-        canvas_draw_str(canvas, 2, 10, "WINDOW SWITCHER");
+        canvas_draw_str(canvas, 2, 9, "WINDOW SWITCHER");
         canvas_set_font(canvas, FontSecondary);
-        canvas_draw_str(canvas, 2, 21, "L->U  U->R");
-        canvas_draw_str(canvas, 2, 31, "R->D  D->L");
-        canvas_draw_str(canvas, 2, 41, "OK=SELECT WINDOW");
-        canvas_draw_str(canvas, 2, 51, "BACK=APP SWITCHER");
-        canvas_draw_str(canvas, 2, 62, app->bt_connected ? "BT: CONNECTED" : "BT: WAITING");
+
+        // Central D-pad graphic. Highlight shows the last physical input.
+        draw_dpad(canvas, 31, 35, app->has_last_key ? input_to_highlight(app->last_key) : -1);
+
+        draw_arrow(canvas, 66, 22, 0, -1);
+        draw_arrow(canvas, 86, 22, 1, 0);
+        draw_arrow(canvas, 66, 40, 0, 1);
+        draw_arrow(canvas, 86, 40, -1, 0);
+
+        canvas_draw_str(canvas, 58, 54, "L U R D");
+        canvas_draw_str(canvas, 58, 63, "U R D L");
+
+        if(app->has_last_key) {
+            draw_event_badge(canvas, app->last_key, app->command_held);
+        }
     } else if(app->mode == HidModeExitConfirm) {
         canvas_draw_str(canvas, 2, 10, "EXIT APPLICATION?");
         canvas_set_font(canvas, FontSecondary);
-        canvas_draw_str(canvas, 2, 24, "OK = YES");
-        canvas_draw_str(canvas, 2, 36, "BACK = NO");
-        canvas_draw_str(canvas, 2, 50, "CMD WILL BE RELEASED");
-        canvas_draw_str(canvas, 2, 62, "OK=YES  BACK=NO");
+
+        canvas_draw_rframe(canvas, 4, 18, 36, 28, 4);
+        canvas_draw_str(canvas, 12, 29, "OK");
+        canvas_draw_str(canvas, 9, 40, "YES");
+
+        canvas_draw_rframe(canvas, 47, 18, 42, 28, 4);
+        canvas_draw_str(canvas, 56, 29, "BACK");
+        canvas_draw_str(canvas, 58, 40, "NO");
+
+        canvas_draw_circle(canvas, 111, 32, 13);
+        canvas_draw_line(canvas, 104, 32, 118, 32);
+        canvas_draw_line(canvas, 111, 25, 111, 39);
+        canvas_draw_str(canvas, 89, 57, "RELEASE CMD");
+
+        if(app->has_last_key) {
+            draw_event_badge(canvas, app->last_key, app->command_held);
+        }
     } else {
-        canvas_draw_str(canvas, 2, 10, "BT HID BRIDGE");
+        canvas_draw_str(canvas, 2, 9, "BT HID BRIDGE");
         canvas_set_font(canvas, FontSecondary);
-        canvas_draw_str(canvas, 2, 21, "D-PAD REMAP");
-        canvas_draw_str(canvas, 2, 31, "L->U  U->R");
-        canvas_draw_str(canvas, 2, 41, "R->D  D->L");
-        canvas_draw_str(canvas, 2, 51, "OK: APP SWITCHER");
-        canvas_draw_str(canvas, 2, 62, app->bt_connected ? "BT: CONNECTED" : "BT: WAITING");
+
+        // Main screen: D-pad + destination arrows.
+        draw_dpad(canvas, 31, 35, app->has_last_key ? input_to_highlight(app->last_key) : -1);
+
+        draw_arrow(canvas, 70, 20, 0, -1);
+        draw_arrow(canvas, 88, 20, 1, 0);
+        draw_arrow(canvas, 70, 38, 0, 1);
+        draw_arrow(canvas, 88, 38, -1, 0);
+
+        canvas_draw_str(canvas, 60, 51, "L U R D");
+        canvas_draw_str(canvas, 60, 60, "U R D L");
+
+        canvas_draw_rframe(canvas, 2, 50, 44, 12, 3);
+        canvas_draw_str(canvas, 8, 59, "OK=APP");
+
+        if(app->has_last_key) {
+            draw_event_badge(canvas, app->last_key, app->command_held);
+        }
     }
 }
 
