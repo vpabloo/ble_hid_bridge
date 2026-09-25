@@ -241,11 +241,11 @@ static void handle_main_menu(BtHidBridgeApp* app, const InputEvent* input) {
             log_append(app, "HOLD BACK TO EXIT");
             break;
 
+        // D-pad disabled in main menu.
         case InputKeyLeft:
         case InputKeyUp:
         case InputKeyRight:
         case InputKeyDown:
-            remapped_direction(app, input->key);
             break;
 
         default:
